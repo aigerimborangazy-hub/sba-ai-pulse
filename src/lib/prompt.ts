@@ -1,94 +1,126 @@
 // ============================================================
-// SBA AI Pulse — LLM prompt builder for news gathering
+// SBA AI Pulse — Multi-query LLM prompt builder
+//
+// Instead of one monolithic prompt, we split into focused search
+// queries that each target a specific area. This dramatically
+// improves coverage because Perplexity Sonar searches differently
+// for each query.
 // ============================================================
 import { GOV_PRIORITIES, SK_COMPANIES, GOV_SOURCES } from "./constants";
 
+const prioritiesList = GOV_PRIORITIES.map((p, i) => `${i + 1}. "${p}"`).join("\n");
+const companiesList = SK_COMPANIES.join(", ");
+const govSourcesList = GOV_SOURCES.join(", ");
+
+const preferredSources = [
+  // Казахстанские новостные сайты
+  "kapital.kz", "kursiv.media", "tengrinews.kz", "zakon.kz",
+  "inbusiness.kz", "kazpravda.kz", "informburo.kz", "forbes.kz",
+  "khabar.kz", "24.kz", "kazmonitor.com", "liter.kz",
+  "nr.gov.kz", "mid.gov.kz", "kaztel.kz",
+  // Официальные государственные источники
+  "akorda.kz", "primeminister.kz", "adilet.zan.kz", "gov.kz",
+  // Корпоративные сайты группы СК
+  "kmg.kz", "kazatomprom.kz", "ktz.kz", "samruk-energy.kz",
+  "qazaqgaz.kz", "kegoc.kz", "kazakhtelecom.kz", "kazpost.kz",
+  "airastana.com", "tauken-samruk.kz",
+  // Международные ИИ/тех источники
+  "techcrunch.com", "theverge.com", "wired.com", "reuters.com",
+  "bloomberg.com", "ft.com", "bbc.com", "cnbc.com",
+  "zdnet.com", "arstechnica.com", "venturebeat.com",
+].join(", ");
+
 /**
- * Build the system + user prompt that instructs the Perplexity-via-OpenRouter model
- * to search for recent AI/automation news in Kazakhstan's corporate sector and return
- * strictly-formatted JSON.
- *
- * The model MUST use its web-search capability (Perplexity Sonar does this automatically).
+ * Each query targets a specific area for better search coverage.
+ * Perplexity Sonar does a fresh web search per query, so splitting
+ * into focused queries yields more diverse and relevant results.
  */
-export function buildNewsPrompt(): string {
-  const prioritiesList = GOV_PRIORITIES.map((p, i) => `${i + 1}. "${p}"`).join("\n");
-  const companiesList = SK_COMPANIES.join(", ");
-  const govSourcesList = GOV_SOURCES.join(", ");
+export const SEARCH_QUERIES = [
+  {
+    id: "kz-ai-general",
+    focus: "Казахстан ИИ и цифровизация — общие новости",
+    keywords: "Казахстан ИИ, Казахстан цифровизация, Казахстан автоматизация, Год ИИ 2026 Казахстан, Казахстан искусственный интеллект, Казахстан робототехника",
+  },
+  {
+    id: "sk-companies",
+    focus: "Компании группы Самрук-Казына — ИИ проекты и цифровизация",
+    keywords: "КазМунайГаз ИИ, Казатомпром автоматизация, КТЗ цифровизация, Казахтелеком ИИ, KEGOC автоматизация, QazaqGaz ИИ, Samruk-Energy цифровизация, Kazpost ИИ, Air Astana автоматизация, Tau-Ken Samruk ИИ, Самрук-Казына ИИ проекты",
+  },
+  {
+    id: "gov-policy",
+    focus: "Государственная политика — послания, кодексы, поручения",
+    keywords: "Послание Президента Казахстан ИИ, Цифровой кодекс Казахстан, Казахстан цифровизация политика, akorda.kz ИИ, primeminister.kz цифровизация, Казахстан госпрограмма ИИ, Smart Cargo Казахстан, водные ресурсы ИИ Казахстан",
+  },
+  {
+    id: "industry-specific",
+    focus: "Отраслевые ИИ-решения — нефтегаз, ГМК, транспорт, энергетика",
+    keywords: "Kazakhstan AI oil gas, Kazakhstan AI mining, AI энергетика Казахстан, Казахстан ИИ транспорт, Казахстан ИИ телеком, Казахстан промышленная безопасность ИИ, Казахстан предиктивная аналитика, Казахстан дроны ИИ",
+  },
+  {
+    id: "global-with-kz",
+    focus: "Глобальные ИИ-новости с импликацией для Казахстана",
+    keywords: "AI regulation 2026, AI corporate adoption 2026, AI emerging markets, AI central Asia, generative AI enterprise 2026, AI compliance governance 2026, Kazakhstan AI adoption global context",
+  },
+];
 
-  // Comprehensive list of reliable Kazakhstan & international news sources
-  const preferredSources = [
-    // Казахстанские новостные сайты
-    "kapital.kz", "kursiv.media", "tengrinews.kz", "zakon.kz",
-    "inbusiness.kz", "kazpravda.kz", "informburo.kz", "forbes.kz",
-    "khabar.kz", "24.kz", "kazmonitor.com", "liter.kz",
-    "nr.gov.kz", "mid.gov.kz", "kaztel.kz",
-    // Официальные государственные источники
-    "akorda.kz", "primeminister.kz", "adilet.zan.kz", "gov.kz",
-    // Корпоративные сайты группы СК
-    "kmg.kz", "kazatomprom.kz", "ktz.kz", "samruk-energy.kz",
-    "qazaqgaz.kz", "kegoc.kz", "kazakhtelecom.kz", "kazpost.kz",
-    "airastana.com", "tauken-samruk.kz",
-    // Международные ИИ/тех источники (для глобальных новостей с KZ импликацией)
-    "techcrunch.com", "theverge.com", "wired.com", "reuters.com",
-    "bloomberg.com", "ft.com", "bbc.com", "cnbc.com",
-    "zdnet.com", "arstechnica.com", "venturebeat.com",
-  ].join(", ");
+/**
+ * Build a focused prompt for a single search query.
+ * Each query returns 3-5 items max to keep responses manageable.
+ */
+export function buildQueryPrompt(query: (typeof SEARCH_QUERIES)[number]): string {
+  return `Ты — аналитический ИИ-ассистент. Ищи новости за ПОСЛЕДНИЕ 7 ДНЕЙ с помощью веб-поиска.
 
-  return `Ты — аналитический ИИ-ассистент, который проводит мониторинг новостей за ПОСЛЕДНИЕ 7 ДНЕЙ с помощью веб-поиска.
-Твоя задача: найти все значимые новости об искусственном интеллекте и автоматизации в корпоративном / квази-государственном секторе Казахстана.
+Фокус поиска: ${query.focus}
 
-## Ключевые компании группы Самрук-Казына (приоритет):
+Ключевые слова для поиска: ${query.keywords}
+
+## Ключевые компании группы Самрук-Казына:
 ${companiesList}
 
-## Отслеживаемые приоритеты госповестки (привяжи каждую новость к ближайшему):
+## Отслеживаемые приоритеты госповестки:
 ${prioritiesList}
 
-## Официальные источники государственных распоряжений:
+## Официальные источники гос. распоряжений:
 ${govSourcesList}
-Если новость касается правительственного поручения или выступления Президента — процитируй текст распоряжения ДОСЛОВНО и укажи официальный источник URL. НЕ paraphrase смысл государственного поручения.
+Если новость касается гос. поручения — процитируй ДОСЛОВНО и укажи официальный URL.
 
-## Доверенные источники (ищи здесь прежде всего — текстовые новостные статьи, НЕ видео):
+## Доверенные источники (ищи здесь — текстовые статьи, НЕ видео):
 ${preferredSources}
 
-## Правила отбора:
-1. ПРИОРИТЕТ: новости, касающиеся Казахстана, компаний группы Самрук-Казына ИЛИ глобальные новости об ИИ, которые требуют конкретных действий от казахстанской компании.
-2. ИСКЛЮЧИ: общий глобальный хайп (например, "OpenAI выпустила модель"), если нет прямой локальной импликации.
-3. Верни от 10 до 15 пунктов — чем больше релевантных новостей, тем лучше. Приоритет: Казахстан > СНГ > глобальные с KZ-импликацией.
-4. Каждый пункт ОБЯЗАН иметь рабочий URL источника, начинающийся с http. Если URL недоступен — НЕ включай этот пункт.
-5. Весь текст на русском языке.
-6. Делай несколько поисковых запросов с разными ключевыми словами: "Казахстан ИИ", "Казахстан автоматизация", "Самрук-Казына ИИ", "Kazakhstan AI", "Kazakhstan digitalization", "Казахстан цифровизация", "КазМунайГаз ИИ", "Казатомпром автоматизация", "КТЗ цифровизация", "Казахтелеком ИИ", "KEGOC автоматизация", "QazaqGaz ИИ", "Год ИИ 2026 Казахстан", "цифровой кодекс Казахстан", "AI mining Kazakhstan", "Smart Cargo Казахстан".
-7. ИСКЛЮЧИ YouTube, TikTok, Instagram, Facebook, VK видео-ссылки как sourceUrl — нужны только текстовые новостные статьи и официальные пресс-релизы. Если источником является видео — найди текстовый отчёт об этом же событии на новостном сайте.
+## Правила:
+1. ПРИОРИТЕТ: новости Казахстана и СК-компаний, ИЛИ глобальные с KZ-импликацией.
+2. ИСКЛЮЧИ: общий глобальный хайп без локальной импликации.
+3. Верни от 3 до 5 самых значимых пунктов для этого фокуса.
+4. Каждый пункт ОБЯЗАН иметь реальный URL источника (http...). НЕ выдумывай URL.
+5. ИСКЛЮЧИ YouTube, TikTok, Instagram, Facebook, VK ссылки — только текстовые статьи.
+6. Весь текст на русском языке.
 
 ## Формат ответа:
-Верни СТРОГО JSON-объект следующей структуры (без markdown-обёртки, без дополнительного текста, без code fence):
+Верни СТРОГО JSON (без markdown, без code fence):
 
 {
   "items": [
     {
       "title": "короткий заголовок, RU",
       "summary": "2-3 предложения, нейтральный тон, RU",
-      "sourceUrl": "https://... (ОБЯЗАТЕЛЬНО, должен начинаться с http, только реальный URL из поиска)",
-      "sourceName": "название источника, например Tengrinews, Akorda, Kapital",
-      "publishedAt": "ISO date if known, else пустая строка",
+      "sourceUrl": "https://... (реальный URL из поиска)",
+      "sourceName": "название источника",
+      "publishedAt": "ISO date или пустая строка",
       "industryTags": ["Нефтегаз","Транспорт","Энергетика","Кросс-отраслевое","ГМК","Телеком"],
-      "significance": "high или medium или low",
+      "significance": "high/medium/low",
       "actionPoint": "1 конкретное действие для руководителя, RU",
       "training": {
-        "recommendation": "что изучить / какой модуль построить, RU",
+        "recommendation": "что изучить, RU",
         "existsInCatalog": false,
         "ticketSuggested": false
       },
       "govAlignment": {
-        "priority": "ближайший приоритет из списка выше",
-        "note": "1 строка, как это соотносится, RU"
+        "priority": "ближайший приоритет из списка",
+        "note": "1 строка как это соотносится, RU"
       }
     }
   ]
 }
 
-ВАЖНО:
-- Каждый sourceUrl ОБЯЗАН начинаться с http и быть реальным URL найденным через веб-поиск.
-- НЕ выдумывай URL. Если не можешь найти реальный URL — НЕ включай пункт.
-- Если новость о государственном поручении — процитируй дословно в summary и укажи официальный URL.
-- Верни ТОЛЬКО чистый JSON. Без markdown, без обёрток, без пояснений.`;
+ТОЛЬКО чистый JSON. Без обёрток.`;
 }
